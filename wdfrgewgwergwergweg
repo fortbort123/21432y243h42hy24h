@@ -121,6 +121,66 @@ local function createGradient(parent, colorA, colorB, rotation)
 	return g
 end
 
+local function bindButtonStrokeHover(button, stroke)
+	if not (button and button:IsA("GuiButton") and stroke and stroke:IsA("UIStroke")) then
+		return
+	end
+	local defaultT = stroke.Transparency
+	local hoverT = math.clamp(defaultT - 0.25, 0, 1)
+	local ti = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	button.MouseEnter:Connect(function()
+		TweenService:Create(stroke, ti, { Transparency = hoverT }):Play()
+	end)
+	button.MouseLeave:Connect(function()
+		TweenService:Create(stroke, ti, { Transparency = defaultT }):Play()
+	end)
+end
+
+local function createSheenAndShadeOverlays(button, cornerPx)
+	if not (button and typeof(button) == "Instance") then
+		return
+	end
+	cornerPx = tonumber(cornerPx) or 6
+
+	local sheenOverlay = Instance.new("Frame")
+	sheenOverlay.Name = "SheenOverlay"
+	sheenOverlay.BackgroundTransparency = 1
+	sheenOverlay.BorderSizePixel = 0
+	sheenOverlay.Size = UDim2.new(1, 0, 1, 0)
+	sheenOverlay.ZIndex = (button.ZIndex or 1) + 1
+	sheenOverlay.Parent = button
+	createCorner(sheenOverlay, cornerPx)
+	local sheenGradient = Instance.new("UIGradient")
+	sheenGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.9),
+		NumberSequenceKeypoint.new(0.3, 0.96),
+		NumberSequenceKeypoint.new(0.5, 1),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	sheenGradient.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+	sheenGradient.Rotation = 90
+	sheenGradient.Parent = sheenOverlay
+
+	local shadeOverlay = Instance.new("Frame")
+	shadeOverlay.Name = "ShadeOverlay"
+	shadeOverlay.BackgroundTransparency = 1
+	shadeOverlay.BorderSizePixel = 0
+	shadeOverlay.Size = UDim2.new(1, 0, 1, 0)
+	shadeOverlay.ZIndex = (button.ZIndex or 1) + 1
+	shadeOverlay.Parent = button
+	createCorner(shadeOverlay, cornerPx)
+	local shadeGradient = Instance.new("UIGradient")
+	shadeGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.6, 1),
+		NumberSequenceKeypoint.new(0.85, 0.96),
+		NumberSequenceKeypoint.new(1, 0.92),
+	})
+	shadeGradient.Color = ColorSequence.new(Color3.fromRGB(0, 0, 0))
+	shadeGradient.Rotation = 90
+	shadeGradient.Parent = shadeOverlay
+end
+
 local function clamp01(x)
 	return math.clamp(x, 0, 1)
 end
@@ -131,6 +191,7 @@ local function makeDraggable(frame, dragHandle)
 	local dragStart
 	local startPos
 	local targetPos
+	local settleUntil
 	local connBegan, connChanged, connEnded, renderConn
 
 	connBegan = dragHandle.InputBegan:Connect(function(input)
@@ -141,14 +202,20 @@ local function makeDraggable(frame, dragHandle)
 		dragStart = input.Position
 		startPos = frame.Position
 		targetPos = startPos
+		settleUntil = nil
 
 		safeDisconnect(renderConn)
 		renderConn = RunService.RenderStepped:Connect(function()
-			if not dragging or not targetPos then
+			if not targetPos then
 				return
 			end
 			-- Smooth follow (legacy-like) instead of snapping.
-			frame.Position = frame.Position:Lerp(targetPos, 0.28)
+			frame.Position = frame.Position:Lerp(targetPos, 0.42)
+			if (not dragging) and settleUntil and os.clock() >= settleUntil then
+				safeDisconnect(renderConn)
+				renderConn = nil
+				settleUntil = nil
+			end
 		end)
 	end)
 
@@ -166,8 +233,8 @@ local function makeDraggable(frame, dragHandle)
 	connEnded = UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = false
-			safeDisconnect(renderConn)
-			renderConn = nil
+			-- Let it ease into the final target briefly.
+			settleUntil = os.clock() + 0.12
 		end
 	end)
 
@@ -227,7 +294,9 @@ local function createToggleRow(parent, labelText, defaultOn)
 	checkbox.Text = ""
 	checkbox.Parent = row
 	createCorner(checkbox, 6)
-	createStroke(checkbox, 1, 0.4, Color3.fromRGB(55, 58, 61))
+	local checkboxStroke = createStroke(checkbox, 1, 0.4, Color3.fromRGB(55, 58, 61))
+	bindButtonStrokeHover(checkbox, checkboxStroke)
+	createSheenAndShadeOverlays(checkbox, 6)
 
 	local check = Instance.new("ImageLabel")
 	check.Name = "Check"
@@ -242,7 +311,33 @@ local function createToggleRow(parent, labelText, defaultOn)
 
 	setCheckboxChecked(checkbox, defaultOn and true or false)
 
-	return row, checkbox
+	-- Optional legacy-style keybind button slot (hidden unless enabled)
+	local keybindButton = Instance.new("TextButton")
+	keybindButton.Name = "KeybindButton"
+	keybindButton.AnchorPoint = Vector2.new(1, 0.5)
+	keybindButton.Position = UDim2.new(1, -32, 0.5, 0)
+	keybindButton.Size = UDim2.new(0, 44, 0, 20)
+	keybindButton.BackgroundColor3 = Theme.PANEL_2
+	keybindButton.BackgroundTransparency = 0.2
+	keybindButton.BorderSizePixel = 0
+	keybindButton.AutoButtonColor = false
+	keybindButton.Text = "None"
+	keybindButton.TextColor3 = Theme.TEXT_MUTED
+	keybindButton.Font = Enum.Font.GothamBold
+	keybindButton.TextSize = 14
+	keybindButton.Visible = false
+	keybindButton.Parent = row
+	createCorner(keybindButton, 6)
+	local kbStroke = createStroke(keybindButton, 1, 0.4, Color3.fromRGB(55, 58, 61))
+	bindButtonStrokeHover(keybindButton, kbStroke)
+	createSheenAndShadeOverlays(keybindButton, 6)
+
+	local keybindTarget = Instance.new("ObjectValue")
+	keybindTarget.Name = "KeybindTarget"
+	keybindTarget.Value = checkbox
+	keybindTarget.Parent = keybindButton
+
+	return row, checkbox, keybindButton
 end
 
 local function bindSlider(sliderRow, opts)
@@ -330,6 +425,19 @@ local function bindSlider(sliderRow, opts)
 
 	local dragging = false
 	local renderConn, endConn
+	local handleTween = nil
+	local handleSizeTweenInfo = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local function tweenHandleSize(target)
+		if not (handle and handle:IsA("Frame")) then
+			return
+		end
+		if handleTween then
+			handleTween:Cancel()
+			handleTween = nil
+		end
+		handleTween = TweenService:Create(handle, handleSizeTweenInfo, { Size = target })
+		handleTween:Play()
+	end
 	local function stopDrag()
 		dragging = false
 		safeDisconnect(renderConn)
@@ -344,6 +452,7 @@ local function bindSlider(sliderRow, opts)
 				end
 			end)
 		end
+		tweenHandleSize(UDim2.new(0, 12, 0, 12))
 	end
 	local function startDrag()
 		if dragging then return end
@@ -352,6 +461,8 @@ local function bindSlider(sliderRow, opts)
 			bubble.Visible = true
 			TweenService:Create(bubble, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0, TextTransparency = 0 }):Play()
 		end
+		-- Legacy: slightly enlarge the handle while dragging.
+		tweenHandleSize(UDim2.new(0, 13.8, 0, 13.8))
 
 		renderConn = RunService.RenderStepped:Connect(function()
 			if not dragging then return end
@@ -583,6 +694,18 @@ local function createKeybindsDisplay(opts)
 	if typeof(parent) ~= "Instance" then
 		parent = CoreGui
 	end
+	local accentColor = opts.accentColor or Theme.ACCENT_PRIMARY
+
+	local display = {
+		Buttons = {},
+		_seen = setmetatable({}, { __mode = "k" }),
+		_refreshScheduled = false,
+		_conns = {},
+		Gui = nil,
+		Card = nil,
+		Container = nil,
+		NoKeybindsLabel = nil,
+	}
 
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "FancyKeybindsDisplayGui"
@@ -590,174 +713,472 @@ local function createKeybindsDisplay(opts)
 	gui.IgnoreGuiInset = true
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.Parent = parent
+	display.Gui = gui
 
 	local card = Instance.new("Frame")
-	card.Name = "KeybindsCard"
-	card.AnchorPoint = Vector2.new(1, 0)
-	card.Position = UDim2.new(1, -22, 0, 90)
-	card.Size = UDim2.new(0, 260, 0, 260)
-	card.BackgroundColor3 = Theme.ACCENT_BLACK
-	card.BackgroundTransparency = 0
-	card.BorderSizePixel = 0
+	card.Name = "Card"
 	card.Visible = true
+	card.BackgroundTransparency = 0.05
+	card.BackgroundColor3 = Color3.fromRGB(18, 18, 20)
+	card.BorderSizePixel = 0
+	card.AnchorPoint = Vector2.new(0, 0.5)
+	card.Position = UDim2.new(0, 116, 0.5, 120)
+	card.Size = UDim2.new(0, 240, 0, 300)
+	card.ZIndex = 3
 	card.Parent = gui
-	createCorner(card, 12)
-	createStroke(card, 1, 0.35, Theme.STROKE)
-	createGradient(card, Color3.fromRGB(255, 255, 255), Color3.fromRGB(255, 255, 255), 90).Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.06),
-		NumberSequenceKeypoint.new(0.5, 0.12),
-		NumberSequenceKeypoint.new(1, 0.06),
-	})
+	display.Card = card
 
-	local shadow = Instance.new("ImageLabel")
-	shadow.Name = "DropShadow"
-	shadow.Image = "rbxassetid://7912134082"
-	shadow.ImageTransparency = 0.72
-	shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+	local cardCorner = Instance.new("UICorner")
+	cardCorner.CornerRadius = UDim.new(0, 12)
+	cardCorner.Parent = card
+
+	local cardStroke = Instance.new("UIStroke")
+	cardStroke.Thickness = 1
+	cardStroke.Transparency = 0.5
+	cardStroke.Color = Color3.fromRGB(40, 43, 46)
+	cardStroke.ZIndex = 1
+	cardStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	cardStroke.LineJoinMode = Enum.LineJoinMode.Round
+	cardStroke.Parent = card
+
+	local shadow = Instance.new("Frame")
+	shadow.Name = "Shadow"
 	shadow.BackgroundTransparency = 1
 	shadow.BorderSizePixel = 0
-	shadow.AnchorPoint = Vector2.new(0.5, 0.5)
-	shadow.Position = UDim2.new(0.5, 0, 0.5, 0)
+	shadow.Position = UDim2.new(0, -16, 0, -16)
 	shadow.Size = UDim2.new(1, 32, 1, 32)
-	shadow.ScaleType = Enum.ScaleType.Stretch
-	shadow.ZIndex = card.ZIndex - 1
+	shadow.ZIndex = 2
 	shadow.Parent = card
+
+	local glow = Instance.new("Frame")
+	glow.Name = "Glow"
+	glow.BackgroundTransparency = 0.95
+	glow.BackgroundColor3 = accentColor
+	glow.BorderSizePixel = 0
+	glow.Size = UDim2.new(1, 0, 1, 0)
+	glow.ZIndex = 2
+	glow.Parent = shadow
+
+	local glowCorner = Instance.new("UICorner")
+	glowCorner.CornerRadius = UDim.new(0, 12)
+	glowCorner.Parent = glow
+
+	local glowGradient = Instance.new("UIGradient")
+	glowGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.9),
+		NumberSequenceKeypoint.new(0.5, 0.96),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	glowGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, accentColor),
+		ColorSequenceKeypoint.new(1, accentColor),
+	})
+	glowGradient.Rotation = 90
+	glowGradient.Parent = glow
 
 	local header = Instance.new("Frame")
 	header.Name = "Header"
 	header.BackgroundTransparency = 1
 	header.BorderSizePixel = 0
-	header.Size = UDim2.new(1, 0, 0, 36)
+	header.Size = UDim2.new(1, 0, 0, 40)
+	header.ZIndex = 3
 	header.Parent = card
 
-	local headerPad = Instance.new("UIPadding")
-	headerPad.PaddingLeft = UDim.new(0, 12)
-	headerPad.PaddingRight = UDim.new(0, 12)
-	headerPad.Parent = header
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Name = "Title"
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Position = UDim2.new(0, 12, 0, 0)
+	titleLabel.Size = UDim2.new(1, -24, 1, 0)
+	titleLabel.Font = Enum.Font.GothamMedium
+	titleLabel.TextSize = 14
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.TextYAlignment = Enum.TextYAlignment.Center
+	titleLabel.TextColor3 = Color3.fromRGB(230, 230, 235)
+	titleLabel.Text = "Keybinds"
+	titleLabel.ZIndex = 3
+	titleLabel.Parent = header
 
-	local title = Instance.new("TextLabel")
-	title.Name = "Title"
-	title.BackgroundTransparency = 1
-	title.Size = UDim2.new(1, 0, 1, 0)
-	title.Text = "Keybinds"
-	title.TextColor3 = Theme.TEXT
-	title.Font = Enum.Font.GothamBold
-	title.TextSize = 14
-	title.TextXAlignment = Enum.TextXAlignment.Left
-	title.TextYAlignment = Enum.TextYAlignment.Center
-	title.Parent = header
+	local accent = Instance.new("Frame")
+	accent.Name = "Accent"
+	accent.BackgroundTransparency = 0.15
+	accent.BackgroundColor3 = accentColor
+	accent.BorderSizePixel = 0
+	accent.AnchorPoint = Vector2.new(0, 1)
+	accent.Position = UDim2.new(0, 12, 1, -4)
+	accent.Size = UDim2.new(0, 36, 0, 3)
+	accent.ZIndex = 3
+	accent.Parent = header
 
-	local listHolder = Instance.new("Frame")
-	listHolder.Name = "ListHolder"
-	listHolder.BackgroundTransparency = 1
-	listHolder.BorderSizePixel = 0
-	listHolder.Position = UDim2.new(0, 0, 0, 40)
-	listHolder.Size = UDim2.new(1, 0, 1, -48)
-	listHolder.Parent = card
+	local accentCorner = Instance.new("UICorner")
+	accentCorner.CornerRadius = UDim.new(1, 0)
+	accentCorner.Parent = accent
 
-	local listPad = Instance.new("UIPadding")
-	listPad.PaddingLeft = UDim.new(0, 12)
-	listPad.PaddingRight = UDim.new(0, 12)
-	listPad.PaddingTop = UDim.new(0, 4)
-	listPad.PaddingBottom = UDim.new(0, 8)
-	listPad.Parent = listHolder
+	local separator = Instance.new("Frame")
+	separator.Name = "Separator"
+	separator.BackgroundTransparency = 1
+	separator.BorderSizePixel = 0
+	separator.Position = UDim2.new(0, 12, 0, 40)
+	separator.Size = UDim2.new(1, -24, 0, 10)
+	separator.ZIndex = 3
+	separator.Parent = card
 
-	local list = Instance.new("UIListLayout")
-	list.SortOrder = Enum.SortOrder.LayoutOrder
-	list.Padding = UDim.new(0, 8)
-	list.Parent = listHolder
+	local sepGradient = Instance.new("UIGradient")
+	sepGradient.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.4, 0.65),
+		NumberSequenceKeypoint.new(0.5, 0.5),
+		NumberSequenceKeypoint.new(0.6, 0.65),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	sepGradient.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 255, 255)),
+	})
+	sepGradient.Rotation = 90
+	sepGradient.Parent = separator
 
-	local placeholder = Instance.new("TextLabel")
-	placeholder.Name = "Empty"
-	placeholder.BackgroundTransparency = 1
-	placeholder.Size = UDim2.new(1, 0, 0, 18)
-	placeholder.Text = "No Keybinds Assigned"
-	placeholder.TextColor3 = Theme.TEXT_MUTED
-	placeholder.Font = Enum.Font.GothamBold
-	placeholder.TextSize = 13
-	placeholder.TextXAlignment = Enum.TextXAlignment.Left
-	placeholder.Parent = listHolder
+	local container = Instance.new("ScrollingFrame")
+	container.Name = "KeybindsContainer"
+	container.BackgroundTransparency = 1
+	container.BorderSizePixel = 0
+	container.Position = UDim2.new(0, 0, 0, 50)
+	container.Size = UDim2.new(1, 0, 1, -50)
+	container.ScrollBarImageColor3 = Color3.fromRGB(40, 43, 46)
+	container.ScrollBarThickness = 0
+	container.CanvasSize = UDim2.new(0, 0, 0, 0)
+	container.ScrollingDirection = Enum.ScrollingDirection.XY
+	container.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
+	container.TopImage = "rbxasset://textures/ui/Scroll/scroll-top.png"
+	container.BottomImage = "rbxasset://textures/ui/Scroll/scroll-bottom.png"
+	container.ZIndex = 3
+	container.Parent = card
+	display.Container = container
 
-	local itemsById = {}
-	local destroyDrag = makeDraggable(card, header)
+	local kp = Instance.new("UIPadding")
+	kp.PaddingTop = UDim.new(0, 8)
+	kp.PaddingBottom = UDim.new(0, 10)
+	kp.PaddingLeft = UDim.new(0, 12)
+	kp.PaddingRight = UDim.new(0, 12)
+	kp.Parent = container
 
-	local function rebuildPlaceholder()
-		local hasAny = false
-		for _ in pairs(itemsById) do
-			hasAny = true
-			break
+	local kl = Instance.new("UIListLayout")
+	kl.VerticalAlignment = Enum.VerticalAlignment.Top
+	kl.FillDirection = Enum.FillDirection.Vertical
+	kl.Padding = UDim.new(0, 8)
+	kl.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	kl.SortOrder = Enum.SortOrder.LayoutOrder
+	kl.Parent = container
+
+	local noKeybindsLabel = Instance.new("TextLabel")
+	noKeybindsLabel.Name = "TextLabel"
+	noKeybindsLabel.LayoutOrder = 0
+	noKeybindsLabel.TextWrapped = false
+	noKeybindsLabel.TextTransparency = 0
+	noKeybindsLabel.TextStrokeTransparency = 1
+	noKeybindsLabel.AnchorPoint = Vector2.new(0, 0)
+	noKeybindsLabel.ZIndex = 1
+	noKeybindsLabel.TextSize = 12
+	noKeybindsLabel.Size = UDim2.new(1, 0, 0, 44)
+	noKeybindsLabel.BorderSizePixel = 1
+	noKeybindsLabel.TextColor3 = Color3.fromRGB(160, 160, 165)
+	noKeybindsLabel.BackgroundTransparency = 1
+	noKeybindsLabel.Text = "No Keybinds Assigned"
+	noKeybindsLabel.TextXAlignment = Enum.TextXAlignment.Center
+	noKeybindsLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	noKeybindsLabel.Rotation = 0
+	noKeybindsLabel.Font = Enum.Font.Gotham
+	noKeybindsLabel.Position = UDim2.new(0, 0, 0, 0)
+	noKeybindsLabel.Visible = false
+	noKeybindsLabel.TextYAlignment = Enum.TextYAlignment.Center
+	noKeybindsLabel.TextScaled = false
+	noKeybindsLabel.BackgroundColor3 = Color3.fromRGB(163, 162, 165)
+	noKeybindsLabel.Parent = container
+	display.NoKeybindsLabel = noKeybindsLabel
+
+	local function destroyRows()
+		for _, child in ipairs(container:GetChildren()) do
+			if child:IsA("Frame") then
+				child:Destroy()
+			end
 		end
-		placeholder.Visible = not hasAny
 	end
 
-	local api = {}
-	function api:SetVisible(v)
-		gui.Enabled = v and true or false
-	end
-	function api:Add(id, labelText, keyText)
-		id = tostring(id or "")
-		if id == "" then
-			return
+	local function createRow(displayName, keyName, isEnabled)
+		if isEnabled == nil then
+			isEnabled = true
 		end
-		if itemsById[id] and itemsById[id].Parent then
-			itemsById[id]:Destroy()
-		end
+
+		local inactiveTextColor = Color3.fromRGB(160, 160, 165)
+		local inactivePillColor = Color3.fromRGB(40, 43, 46)
 
 		local row = Instance.new("Frame")
-		row.Name = "KeybindRow"
-		row.BackgroundTransparency = 1
-		row.Size = UDim2.new(1, 0, 0, 22)
-		row.Parent = listHolder
+		row.Name = tostring(displayName or "Keybind") .. "_Row"
+		row.Visible = true
+		row.BackgroundTransparency = 0.8
+		row.BackgroundColor3 = Color3.fromRGB(27, 30, 33)
+		row.BorderSizePixel = 0
+		row.Size = UDim2.new(1, 0, 0, 28)
+		row.ZIndex = 3
+		row.Parent = container
 
-		local l = Instance.new("TextLabel")
-		l.Name = "Label"
-		l.BackgroundTransparency = 1
-		l.Size = UDim2.new(1, -90, 1, 0)
-		l.Text = tostring(labelText or "")
-		l.TextColor3 = Theme.TEXT
-		l.Font = Enum.Font.GothamBold
-		l.TextSize = 13
-		l.TextXAlignment = Enum.TextXAlignment.Left
-		l.Parent = row
+		local rowCorner = Instance.new("UICorner")
+		rowCorner.CornerRadius = UDim.new(0, 8)
+		rowCorner.Parent = row
 
-		local keyPill = Instance.new("TextLabel")
-		keyPill.Name = "Key"
+		local rowStroke = Instance.new("UIStroke")
+		rowStroke.Thickness = 1
+		rowStroke.Transparency = 0.65
+		rowStroke.Color = Color3.fromRGB(40, 43, 46)
+		rowStroke.ZIndex = 1
+		rowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		rowStroke.LineJoinMode = Enum.LineJoinMode.Round
+		rowStroke.Parent = row
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Name = "Name"
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Size = UDim2.new(1, -74, 1, 0)
+		nameLabel.Position = UDim2.new(0, 10, 0, 0)
+		nameLabel.Font = Enum.Font.Gotham
+		nameLabel.TextSize = 12
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextYAlignment = Enum.TextYAlignment.Center
+		nameLabel.TextColor3 = isEnabled and Color3.fromRGB(230, 230, 235) or inactiveTextColor
+		nameLabel.Text = tostring(displayName or "")
+		nameLabel.ZIndex = 3
+		nameLabel.Parent = row
+
+		local keyPill = Instance.new("Frame")
+		keyPill.Name = "KeyPill"
 		keyPill.AnchorPoint = Vector2.new(1, 0.5)
-		keyPill.Position = UDim2.new(1, 0, 0.5, 0)
-		keyPill.Size = UDim2.new(0, 78, 0, 18)
-		keyPill.BackgroundColor3 = Theme.PANEL_2
-		keyPill.BackgroundTransparency = 0
+		keyPill.Position = UDim2.new(1, -6, 0.5, 0)
+		keyPill.Size = UDim2.new(0, 62, 0, 22)
 		keyPill.BorderSizePixel = 0
-		keyPill.Text = tostring(keyText or "")
-		keyPill.TextColor3 = Theme.TEXT
-		keyPill.Font = Enum.Font.Code
-		keyPill.TextSize = 12
+		keyPill.BackgroundTransparency = 0.9
+		keyPill.BackgroundColor3 = isEnabled and accentColor or inactivePillColor
+		keyPill.ZIndex = 3
 		keyPill.Parent = row
-		createCorner(keyPill, 8)
-		createStroke(keyPill, 1, 0.6, Theme.STROKE)
 
-		itemsById[id] = row
-		rebuildPlaceholder()
-	end
-	function api:Remove(id)
-		id = tostring(id or "")
-		local row = itemsById[id]
-		if row and row.Parent then
-			row:Destroy()
+		local keyPillCorner = Instance.new("UICorner")
+		keyPillCorner.CornerRadius = UDim.new(0, 6)
+		keyPillCorner.Parent = keyPill
+
+		local keyPillStroke = Instance.new("UIStroke")
+		keyPillStroke.Thickness = 1
+		keyPillStroke.Transparency = 0.5
+		keyPillStroke.Color = isEnabled and accentColor or inactivePillColor
+		keyPillStroke.ZIndex = 1
+		keyPillStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		keyPillStroke.LineJoinMode = Enum.LineJoinMode.Round
+		keyPillStroke.Parent = keyPill
+
+		local keyLabel = Instance.new("TextLabel")
+		keyLabel.Name = "KeyLabel"
+		keyLabel.BackgroundTransparency = 1
+		keyLabel.Size = UDim2.new(1, 0, 1, 0)
+		keyLabel.Font = Enum.Font.GothamBold
+		keyLabel.TextSize = 11
+		keyLabel.TextXAlignment = Enum.TextXAlignment.Center
+		keyLabel.TextYAlignment = Enum.TextYAlignment.Center
+		keyLabel.TextColor3 = isEnabled and accentColor or inactiveTextColor
+		keyLabel.Text = tostring(keyName or "")
+		keyLabel.ZIndex = 3
+		keyLabel.Parent = keyPill
+
+		do
+			local ok, textSize = pcall(function()
+				return TextService:GetTextSize(
+					tostring(keyName or ""),
+					keyLabel.TextSize,
+					keyLabel.Font,
+					Vector2.new(1000, keyPill.AbsoluteSize.Y)
+				)
+			end)
+
+			local minWidth = 40
+			local maxWidth = 130
+			local padding = 26
+			local targetWidth = 62
+			if ok and typeof(textSize) == "Vector2" then
+				targetWidth = math.clamp(math.ceil(textSize.X) + padding, minWidth, maxWidth)
+			end
+
+			local function applyLabelWidth(width)
+				nameLabel.Size = UDim2.new(1, -(width + 18), 1, 0)
+			end
+
+			applyLabelWidth(keyPill.Size.X.Offset)
+
+			if targetWidth ~= keyPill.Size.X.Offset then
+				local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+				local tween = TweenService:Create(keyPill, tweenInfo, {
+					Size = UDim2.new(0, targetWidth, 0, 22),
+				})
+				tween:Play()
+
+				local conn
+				conn = keyPill:GetPropertyChangedSignal("Size"):Connect(function()
+					if not (keyPill and keyPill.Parent) then
+						if conn then
+							conn:Disconnect()
+						end
+						return
+					end
+					applyLabelWidth(keyPill.Size.X.Offset)
+				end)
+				table.insert(display._conns, conn)
+			end
 		end
-		itemsById[id] = nil
-		rebuildPlaceholder()
 	end
-	function api:Destroy()
-		pcall(destroyDrag)
-		if gui and gui.Parent then
+
+	function display:SetVisible(isVisible)
+		if card then
+			card.Visible = isVisible and true or false
+		end
+	end
+
+	function display:AddButton(button)
+		if not button or self._seen[button] then
+			return
+		end
+		self._seen[button] = true
+		table.insert(self.Buttons, button)
+		self:ScheduleRefresh()
+	end
+
+	function display:Refresh()
+		if not (self.Gui and self.Gui.Parent ~= nil) then
+			return
+		end
+
+		destroyRows()
+
+		local items = {}
+		for _, btn in ipairs(self.Buttons) do
+			if btn and btn.Parent ~= nil then
+				if btn:GetAttribute("AsteriaKeybindsDisplayIgnore") == true then
+					continue
+				end
+				local keyName = btn:GetAttribute("AsteriaKeybindKeyName")
+				if type(keyName) == "string" and keyName ~= "" and keyName ~= "None" then
+					local labelText = btn:GetAttribute("AsteriaKeybindLabelText")
+					if type(labelText) ~= "string" or labelText == "" then
+						labelText = btn.Name
+					end
+					local isEnabled = true
+					local target = btn:FindFirstChild("KeybindTarget")
+					if target and target:IsA("ObjectValue") then
+						local v = target.Value
+						if typeof(v) == "Instance" and v:IsA("TextButton") then
+							isEnabled = (v:GetAttribute("AsteriaChecked") == true)
+						end
+					end
+					table.insert(items, { label = labelText, key = keyName, enabled = isEnabled })
+				end
+			end
+		end
+
+		table.sort(items, function(a, b)
+			return tostring(a.label) < tostring(b.label)
+		end)
+
+		for _, it in ipairs(items) do
+			createRow(it.label, it.key, it.enabled)
+		end
+
+		local hasAny = #items > 0
+		if noKeybindsLabel then
+			noKeybindsLabel.Visible = not hasAny
+		end
+		container.CanvasSize = UDim2.new(0, 0, 0, kl.AbsoluteContentSize.Y + 1)
+	end
+
+	function display:ScheduleRefresh()
+		if self._refreshScheduled then
+			return
+		end
+		self._refreshScheduled = true
+		task.defer(function()
+			if not (display.Gui and display.Gui.Parent ~= nil) then
+				return
+			end
+			display._refreshScheduled = false
+			display:Refresh()
+		end)
+	end
+
+	function display:Destroy()
+		for _, c in ipairs(self._conns) do
+			pcall(function()
+				c:Disconnect()
+			end)
+		end
+		self._conns = {}
+		if gui and gui.Parent ~= nil then
 			gui:Destroy()
 		end
 	end
 
-	api:SetVisible(false)
-	rebuildPlaceholder()
-	return api
+	do
+		local dragging = false
+		local dragStart = nil
+		local startPos = nil
+		local dragTarget = card.Position
+		local dragInput = nil
+
+		local DRAG_SMOOTHNESS = 22
+
+		local function isDraggingInput(input)
+			return input and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch)
+		end
+
+		table.insert(display._conns, header.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragInput = input
+				dragStart = input.Position
+				startPos = card.Position
+			end
+		end))
+
+		table.insert(display._conns, header.InputEnded:Connect(function(input)
+			if input == dragInput then
+				dragging = false
+				dragInput = nil
+			end
+		end))
+
+		table.insert(display._conns, UserInputService.InputChanged:Connect(function(input)
+			if not dragging then
+				return
+			end
+			if not isDraggingInput(input) then
+				return
+			end
+			if not (dragStart and startPos) then
+				return
+			end
+
+			local delta = input.Position - dragStart
+			dragTarget = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end))
+
+		table.insert(display._conns, RunService.RenderStepped:Connect(function(dt)
+			if not (display.Card and display.Card.Parent ~= nil) then
+				return
+			end
+			local alpha = 1 - math.exp(-DRAG_SMOOTHNESS * dt)
+			display.Card.Position = display.Card.Position:Lerp(dragTarget, alpha)
+		end))
+	end
+
+	display:ScheduleRefresh()
+	return display
 end
 
 local function createWindow(opts)
@@ -1237,8 +1658,11 @@ local function createWindow(opts)
 	pagesContainer.ZIndex = 1
 	pagesContainer.Parent = contentFrame
 
-	-- Keybinds display shell (disabled by default)
-	local keybindsDisplay = createKeybindsDisplay({ parent = CoreGui })
+	-- Keybinds display (legacy fancy card; disabled by default)
+	local keybindsDisplay = createKeybindsDisplay({ parent = CoreGui, accentColor = Theme.ACCENT_PRIMARY })
+	pcall(function()
+		keybindsDisplay:SetVisible(false)
+	end)
 
 	-- Command bar overlay (opens with ')
 	local commandOverlay = Instance.new("Frame")
@@ -1433,6 +1857,299 @@ function AsteriaUI.new(opts)
 	opts = opts or {}
 	local window = createWindow(opts)
 
+	-- Keybind capture + runtime (ported from legacy template)
+	local activeKeybindButton = nil
+	local keybindOwnerByKeyName = {}
+	local keybindChangedCallbackByButton = setmetatable({}, { __mode = "k" })
+	local multiKeybindEnabled = false
+
+	local keybindSizeTweenByButton = setmetatable({}, { __mode = "k" })
+	local keybindLabelSizeTweenByLabel = setmetatable({}, { __mode = "k" })
+
+	local toggleChangedCallbackByCheckbox = setmetatable({}, { __mode = "k" })
+
+	local function toggleCheckboxChecked(checkboxButton)
+		if not checkboxButton then
+			return
+		end
+		local nextVal = not getCheckboxChecked(checkboxButton)
+		setCheckboxChecked(checkboxButton, nextVal)
+		local cb = toggleChangedCallbackByCheckbox[checkboxButton]
+		if cb then
+			cb(nextVal)
+		end
+	end
+
+	local function updateKeybindButtonSize(keybindButton)
+		if not keybindButton or not keybindButton:IsA("TextButton") then
+			return
+		end
+
+		local text = keybindButton.Text or ""
+		local ok, textSize = pcall(function()
+			return TextService:GetTextSize(
+				text,
+				keybindButton.TextSize,
+				keybindButton.Font,
+				Vector2.new(1000, 20)
+			)
+		end)
+
+		if not ok or typeof(textSize) ~= "Vector2" then
+			return
+		end
+
+		local padding = 18
+		local minWidth = 44
+		local maxWidth = 130
+		local targetWidth = math.clamp(math.ceil(textSize.X) + padding, minWidth, maxWidth)
+
+		local sizeTweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local targetKeybindSize = UDim2.new(0, targetWidth, 0, 20)
+
+		local existingSizeTween = keybindSizeTweenByButton[keybindButton]
+		if existingSizeTween then
+			existingSizeTween:Cancel()
+		end
+
+		local sizeTween = TweenService:Create(keybindButton, sizeTweenInfo, {
+			Size = targetKeybindSize,
+		})
+		keybindSizeTweenByButton[keybindButton] = sizeTween
+		sizeTween:Play()
+
+		local toggleRow = keybindButton.Parent
+		if toggleRow and toggleRow:IsA("Frame") then
+			local label = toggleRow:FindFirstChild("Label")
+			if label and label:IsA("TextLabel") then
+				local targetLabelSize = UDim2.new(1, -(targetWidth + 36), 1, 0)
+
+				local existingLabelTween = keybindLabelSizeTweenByLabel[label]
+				if existingLabelTween then
+					existingLabelTween:Cancel()
+				end
+
+				local labelTween = TweenService:Create(label, sizeTweenInfo, {
+					Size = targetLabelSize,
+				})
+				keybindLabelSizeTweenByLabel[label] = labelTween
+				labelTween:Play()
+			end
+		end
+	end
+
+	local function setKeybindButtonVisual(button, isCapturing)
+		if not button then
+			return
+		end
+
+		local stroke = button:FindFirstChildWhichIsA("UIStroke")
+
+		if isCapturing then
+			button:SetAttribute("AsteriaKeybindCapturing", true)
+			button.TextColor3 = Theme.ACCENT_PRIMARY
+			button.Text = "..."
+			if stroke then
+				stroke.Color = Theme.ACCENT_PRIMARY
+				stroke.Transparency = 0.4
+				stroke:SetAttribute("AsteriaKeybindCaptureTransparency", 0.4)
+			end
+			return
+		end
+
+		button:SetAttribute("AsteriaKeybindCapturing", false)
+
+		local defaultTextColor = button:GetAttribute("AsteriaKeybindDefaultTextColor")
+		local defaultText = button:GetAttribute("AsteriaKeybindDefaultText")
+
+		local defaultStrokeColor = button:GetAttribute("AsteriaKeybindDefaultStrokeColor")
+		local defaultStrokeTransparency = button:GetAttribute("AsteriaKeybindDefaultStrokeTransparency")
+
+		if typeof(defaultTextColor) == "Color3" then
+			button.TextColor3 = defaultTextColor
+		end
+		if type(defaultText) == "string" and button.Text == "..." then
+			button.Text = defaultText
+		end
+
+		if stroke then
+			if typeof(defaultStrokeColor) == "Color3" then
+				stroke.Color = defaultStrokeColor
+			else
+				stroke.Color = Color3.fromRGB(55, 58, 61)
+			end
+			if type(defaultStrokeTransparency) == "number" then
+				stroke.Transparency = defaultStrokeTransparency
+			else
+				stroke.Transparency = 0.4
+			end
+		end
+	end
+
+	local function getKeybindTargetCheckbox(button)
+		local target = button:FindFirstChild("KeybindTarget")
+		if target and target:IsA("ObjectValue") then
+			local v = target.Value
+			if typeof(v) == "Instance" and v:IsA("TextButton") then
+				return v
+			end
+		end
+		return nil
+	end
+
+	local function removeOwnerFromKeyMap(keyName, button)
+		local owner = keybindOwnerByKeyName[keyName]
+		if not owner then
+			return
+		end
+
+		if owner == button then
+			keybindOwnerByKeyName[keyName] = nil
+			return
+		end
+
+		if type(owner) == "table" then
+			for i = #owner, 1, -1 do
+				if owner[i] == button then
+					table.remove(owner, i)
+				end
+			end
+			if #owner == 0 then
+				keybindOwnerByKeyName[keyName] = nil
+			elseif #owner == 1 and not multiKeybindEnabled then
+				keybindOwnerByKeyName[keyName] = owner[1]
+			end
+		end
+	end
+
+	local function clearKeybindForButton(button)
+		if not button then
+			return
+		end
+
+		local previousKey = button:GetAttribute("AsteriaKeybindKeyName")
+		if type(previousKey) == "string" then
+			removeOwnerFromKeyMap(previousKey, button)
+		end
+		button:SetAttribute("AsteriaKeybindKeyName", nil)
+
+		button.Text = "None"
+		button:SetAttribute("AsteriaKeybindDefaultText", "None")
+
+		local cb = keybindChangedCallbackByButton[button]
+		if cb then
+			cb(nil)
+		end
+
+		updateKeybindButtonSize(button)
+		if window.KeybindsDisplay then
+			window.KeybindsDisplay:ScheduleRefresh()
+		end
+	end
+
+	local function setKeybindForButton(button, keyCode)
+		if not button or not keyCode then
+			return
+		end
+
+		local keyName = keyCode.Name
+		local previousKey = button:GetAttribute("AsteriaKeybindKeyName")
+		if type(previousKey) == "string" then
+			removeOwnerFromKeyMap(previousKey, button)
+		end
+
+		local existingOwner = keybindOwnerByKeyName[keyName]
+		if not multiKeybindEnabled then
+			if existingOwner and existingOwner ~= button then
+				if typeof(existingOwner) == "Instance" then
+					clearKeybindForButton(existingOwner)
+				elseif type(existingOwner) == "table" then
+					local ownersCopy = {}
+					for _, o in ipairs(existingOwner) do
+						if o ~= button then
+							ownersCopy[#ownersCopy + 1] = o
+						end
+					end
+					for _, o in ipairs(ownersCopy) do
+						clearKeybindForButton(o)
+					end
+				end
+			end
+			keybindOwnerByKeyName[keyName] = button
+		else
+			if not existingOwner then
+				keybindOwnerByKeyName[keyName] = button
+			elseif existingOwner == button then
+				-- already owned
+			elseif type(existingOwner) == "table" then
+				local already = false
+				for _, o in ipairs(existingOwner) do
+					if o == button then
+						already = true
+						break
+					end
+				end
+				if not already then
+					table.insert(existingOwner, button)
+				end
+			else
+				keybindOwnerByKeyName[keyName] = { existingOwner, button }
+			end
+		end
+		button:SetAttribute("AsteriaKeybindKeyName", keyName)
+
+		button.Text = keyName
+		button:SetAttribute("AsteriaKeybindDefaultText", keyName)
+
+		local cb = keybindChangedCallbackByButton[button]
+		if cb then
+			cb(keyCode)
+		end
+
+		updateKeybindButtonSize(button)
+		if window.KeybindsDisplay then
+			window.KeybindsDisplay:ScheduleRefresh()
+		end
+	end
+
+	local function bindKeybindButton(button)
+		if not button or not button:IsA("TextButton") then
+			return
+		end
+		if button:GetAttribute("AsteriaKeybindBound") then
+			return
+		end
+		button:SetAttribute("AsteriaKeybindBound", true)
+
+		if window.KeybindsDisplay and button:GetAttribute("AsteriaKeybindsDisplayIgnore") ~= true then
+			window.KeybindsDisplay:AddButton(button)
+		end
+
+		button:SetAttribute("AsteriaKeybindDefaultTextColor", button.TextColor3)
+		button:SetAttribute("AsteriaKeybindDefaultText", button.Text)
+
+		local stroke = button:FindFirstChildWhichIsA("UIStroke")
+		if stroke then
+			button:SetAttribute("AsteriaKeybindDefaultStrokeColor", stroke.Color)
+			button:SetAttribute("AsteriaKeybindDefaultStrokeTransparency", stroke.Transparency)
+		end
+
+		button.MouseButton1Click:Connect(function()
+			if activeKeybindButton and activeKeybindButton ~= button then
+				setKeybindButtonVisual(activeKeybindButton, false)
+			end
+			activeKeybindButton = button
+			setKeybindButtonVisual(button, true)
+		end)
+
+		updateKeybindButtonSize(button)
+		if window.KeybindsDisplay then
+			window.KeybindsDisplay:ScheduleRefresh()
+		end
+	end
+
+	local menuToggleKeyCode = opts.toggleKey or Enum.KeyCode.RightControl
+
 	local tabs = {}
 	local activeTab = nil
 	local destroyed = false
@@ -1587,16 +2304,63 @@ function AsteriaUI.new(opts)
 		buttonLabel.TextYAlignment = Enum.TextYAlignment.Center
 		buttonLabel.Parent = contentHolder
 
-		local page = Instance.new("ScrollingFrame")
+
+		local page = Instance.new("Frame")
 		page.Name = name .. "Page"
 		page.BackgroundTransparency = 1
 		page.BorderSizePixel = 0
 		page.Size = UDim2.new(1, 0, 1, 0)
-		page.ScrollBarThickness = 0
-		page.AutomaticCanvasSize = Enum.AutomaticSize.Y
-		page.CanvasSize = UDim2.new(0, 0, 0, 0)
 		page.Visible = false
 		page.Parent = window.PagesContainer
+
+		local function createColumnScrollingFrame(frameName, position)
+			local sf = Instance.new("ScrollingFrame")
+			sf.Name = frameName
+			sf.LayoutOrder = 0
+			sf.AnchorPoint = Vector2.new(0, 0)
+			sf.ScrollingDirection = Enum.ScrollingDirection.XY
+			sf.ZIndex = 1
+			sf.BorderSizePixel = 0
+			-- Legacy sizing/spacing, adjusted for pagesContainer already being offset.
+			sf.Size = UDim2.new(0.5, -21, 1, -14)
+			sf.ScrollBarImageColor3 = Color3.fromRGB(40, 43, 46)
+			sf.BackgroundTransparency = 1
+			sf.CanvasSize = UDim2.new(0, 0, 0, 0)
+			sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+			sf.ScrollBarThickness = 0
+			sf.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
+			sf.Visible = true
+			sf.Rotation = 0
+			sf.TopImage = "rbxasset://textures/ui/Scroll/scroll-top.png"
+			sf.Position = position
+			sf.ScrollingEnabled = true
+			sf.BottomImage = "rbxasset://textures/ui/Scroll/scroll-bottom.png"
+			sf.CanvasPosition = Vector2.new(0, 0)
+			sf.BackgroundColor3 = Color3.fromRGB(163, 162, 165)
+			sf.Parent = page
+
+			local frameListLayout = Instance.new("UIListLayout")
+			frameListLayout.Name = "UIListLayout"
+			frameListLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+			frameListLayout.FillDirection = Enum.FillDirection.Vertical
+			frameListLayout.Padding = UDim.new(0, 12)
+			frameListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+			frameListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+			frameListLayout.Parent = sf
+
+			local framePadding = Instance.new("UIPadding")
+			framePadding.Name = "FramePadding"
+			framePadding.PaddingTop = UDim.new(0, 12)
+			framePadding.PaddingBottom = UDim.new(0, 12)
+			framePadding.PaddingLeft = UDim.new(0, 0)
+			framePadding.PaddingRight = UDim.new(0, 0)
+			framePadding.Parent = sf
+
+			return sf
+		end
+
+		local leftContentFrame = createColumnScrollingFrame("LeftContentFrame1", UDim2.new(0, 14, 0, 0))
+		local rightContentFrame = createColumnScrollingFrame("RightContentFrame1", UDim2.new(0.5, 7, 0, 0))
 
 		local list = Instance.new("UIListLayout")
 		list.Padding = UDim.new(0, 12)
@@ -1618,6 +2382,8 @@ function AsteriaUI.new(opts)
 			ButtonIcon = buttonIcon,
 			ButtonLabel = buttonLabel,
 			Page = page,
+			LeftContentFrame = leftContentFrame,
+			RightContentFrame = rightContentFrame,
 		}
 		tabs[name] = tab
 		createdTabsInOrder[#createdTabsInOrder + 1] = tab
@@ -1653,8 +2419,15 @@ function AsteriaUI.new(opts)
 			TweenService:Create(buttonLabel, hoverTi, { TextColor3 = Theme.TEXT_MUTED }):Play()
 		end)
 
-		function tab:Section(title)
-			local sectionFrame, body = createSection(page, title)
+		function tab:Section(title, sectionOpts)
+			sectionOpts = sectionOpts or {}
+			local side = tostring(sectionOpts.side or "left"):lower()
+			local parent = leftContentFrame
+			if side == "right" then
+				parent = rightContentFrame
+			end
+
+			local sectionFrame, body = createSection(parent, title)
 			sectionFrame.Size = UDim2.new(1, 0, 0, 180)
 
 			local sectionObj = {}
@@ -1695,8 +2468,21 @@ function AsteriaUI.new(opts)
 				return h
 			end
 
-			function sectionObj:Toggle(labelText, defaultOn, onChanged)
-				local _, checkbox = createToggleRow(body, labelText, defaultOn)
+			function sectionObj:Toggle(labelText, defaultOn, onChanged, toggleOpts)
+				toggleOpts = toggleOpts or {}
+				local _, checkbox, keybindButton = createToggleRow(body, labelText, defaultOn)
+
+				-- Optional legacy-style keybind button per-toggle.
+				if keybindButton and toggleOpts.keybind == true then
+					keybindButton.Visible = true
+					local keyName = tostring(toggleOpts.keyName or labelText or "")
+					if keyName ~= "" then
+						keybindButton:SetAttribute("AsteriaKeybindKeyName", keyName)
+						keybindButton:SetAttribute("AsteriaKeybindLabelText", tostring(toggleOpts.label or labelText or ""))
+					end
+					keybindButton:SetAttribute("AsteriaKeybindsDisplayIgnore", toggleOpts.ignoreDisplay == true)
+				end
+
 				conns[#conns + 1] = checkbox.MouseButton1Click:Connect(function()
 					local nextVal = not getCheckboxChecked(checkbox)
 					setCheckboxChecked(checkbox, nextVal)
@@ -1710,6 +2496,7 @@ function AsteriaUI.new(opts)
 					Set = function(_, v) setCheckboxChecked(checkbox, v and true or false) end,
 					Get = function() return getCheckboxChecked(checkbox) end,
 					Instance = checkbox,
+					KeybindButton = keybindButton,
 				}
 			end
 
@@ -1733,8 +2520,23 @@ function AsteriaUI.new(opts)
 				b.TextSize = 14
 				b.Parent = body
 				createCorner(b, 8)
-				createStroke(b, 1, 0.4, Color3.fromRGB(54, 57, 60))
+				local stroke = createStroke(b, 1, 0.4, Color3.fromRGB(54, 57, 60))
 				createGradient(b, Theme.ACCENT_BLACK:Lerp(Theme.ACCENT_PRIMARY, 0.2), Theme.ACCENT_BLACK, 90)
+
+				-- Legacy-like hover/press polish.
+				local hoverTi = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+				conns[#conns + 1] = b.MouseEnter:Connect(function()
+					if stroke then
+						TweenService:Create(stroke, hoverTi, { Transparency = 0.15 }):Play()
+					end
+					TweenService:Create(b, hoverTi, { BackgroundColor3 = Theme.PANEL_2:Lerp(Theme.ACCENT_PRIMARY, 0.06) }):Play()
+				end)
+				conns[#conns + 1] = b.MouseLeave:Connect(function()
+					if stroke then
+						TweenService:Create(stroke, hoverTi, { Transparency = 0.4 }):Play()
+					end
+					TweenService:Create(b, hoverTi, { BackgroundColor3 = Theme.PANEL_2 }):Play()
+				end)
 
 				conns[#conns + 1] = b.MouseButton1Click:Connect(function()
 					if type(onClick) == "function" then
@@ -2022,25 +2824,40 @@ function AsteriaUI.new(opts)
 			return
 		end
 
-		if query == "" then
-			for _, section in ipairs(activeTab.Page:GetChildren()) do
-				if section:IsA("Frame") then
-					section.Visible = true
-					for _, row in ipairs(section:GetDescendants()) do
-						if row:IsA("Frame") and row.Name:find("Row") then
-							row.Visible = true
-						end
+		local function forEachSection(cb)
+			local containers = {}
+			if activeTab.LeftContentFrame then
+				containers[#containers + 1] = activeTab.LeftContentFrame
+			end
+			if activeTab.RightContentFrame then
+				containers[#containers + 1] = activeTab.RightContentFrame
+			end
+			if #containers == 0 and activeTab.Page then
+				containers[#containers + 1] = activeTab.Page
+			end
+
+			for _, container in ipairs(containers) do
+				for _, section in ipairs(container:GetChildren()) do
+					if section:IsA("Frame") then
+						cb(section)
 					end
 				end
 			end
+		end
+
+		if query == "" then
+			forEachSection(function(section)
+				section.Visible = true
+				for _, row in ipairs(section:GetDescendants()) do
+					if row:IsA("Frame") and row.Name:find("Row") then
+						row.Visible = true
+					end
+				end
+			end)
 			return
 		end
 
-		for _, section in ipairs(activeTab.Page:GetChildren()) do
-			if not section:IsA("Frame") then
-				continue
-			end
-
+		forEachSection(function(section)
 			local sectionHasMatch = false
 			for _, row in ipairs(section:GetDescendants()) do
 				if row:IsA("Frame") and row.Name:find("Row") then
@@ -2057,7 +2874,7 @@ function AsteriaUI.new(opts)
 				end
 			end
 			section.Visible = sectionHasMatch
-		end
+		end)
 	end
 
 	if window.SearchBox then
