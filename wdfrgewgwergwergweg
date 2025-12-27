@@ -130,7 +130,8 @@ local function makeDraggable(frame, dragHandle)
 	local dragging = false
 	local dragStart
 	local startPos
-	local connBegan, connChanged, connEnded
+	local targetPos
+	local connBegan, connChanged, connEnded, renderConn
 
 	connBegan = dragHandle.InputBegan:Connect(function(input)
 		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
@@ -139,6 +140,16 @@ local function makeDraggable(frame, dragHandle)
 		dragging = true
 		dragStart = input.Position
 		startPos = frame.Position
+		targetPos = startPos
+
+		safeDisconnect(renderConn)
+		renderConn = RunService.RenderStepped:Connect(function()
+			if not dragging or not targetPos then
+				return
+			end
+			-- Smooth follow (legacy-like) instead of snapping.
+			frame.Position = frame.Position:Lerp(targetPos, 0.28)
+		end)
 	end)
 
 	connChanged = dragHandle.InputChanged:Connect(function(input)
@@ -149,12 +160,14 @@ local function makeDraggable(frame, dragHandle)
 			return
 		end
 		local delta = input.Position - dragStart
-		frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		targetPos = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 	end)
 
 	connEnded = UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = false
+			safeDisconnect(renderConn)
+			renderConn = nil
 		end
 	end)
 
@@ -162,6 +175,7 @@ local function makeDraggable(frame, dragHandle)
 		safeDisconnect(connBegan)
 		safeDisconnect(connChanged)
 		safeDisconnect(connEnded)
+		safeDisconnect(renderConn)
 	end
 end
 
@@ -1390,6 +1404,8 @@ local function createWindow(opts)
 	return {
 		Gui = gui,
 		Main = mainFrame,
+		DropShadow = dropShadow,
+		MainStroke = mainStroke,
 		Sidebar = sidebar,
 		TitleContainer = titleContainer,
 		TabScroll = tabScroll,
@@ -1431,29 +1447,35 @@ function AsteriaUI.new(opts)
 		if not btn then
 			return
 		end
+		btn:SetAttribute("AsteriaTabSelected", isSelected == true)
+		local ti = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 		if isSelected then
-			btn.BackgroundTransparency = 0.1
-			btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+			TweenService:Create(btn, ti, {
+				BackgroundTransparency = 0.1,
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			}):Play()
 			if tab.ButtonStroke then
-				tab.ButtonStroke.Transparency = 0.3
+				TweenService:Create(tab.ButtonStroke, ti, { Transparency = 0.3 }):Play()
 			end
 			if tab.ButtonIcon then
-				tab.ButtonIcon.ImageColor3 = Theme.TEXT
+				TweenService:Create(tab.ButtonIcon, ti, { ImageColor3 = Theme.TEXT }):Play()
 			end
 			if tab.ButtonLabel then
-				tab.ButtonLabel.TextColor3 = Theme.TEXT
+				TweenService:Create(tab.ButtonLabel, ti, { TextColor3 = Theme.TEXT }):Play()
 			end
 		else
-			btn.BackgroundTransparency = 1
-			btn.BackgroundColor3 = Color3.fromRGB(33, 36, 40)
+			TweenService:Create(btn, ti, {
+				BackgroundTransparency = 1,
+				BackgroundColor3 = Color3.fromRGB(33, 36, 40),
+			}):Play()
 			if tab.ButtonStroke then
-				tab.ButtonStroke.Transparency = 1
+				TweenService:Create(tab.ButtonStroke, ti, { Transparency = 1 }):Play()
 			end
 			if tab.ButtonIcon then
-				tab.ButtonIcon.ImageColor3 = Theme.TEXT_MUTED
+				TweenService:Create(tab.ButtonIcon, ti, { ImageColor3 = Theme.TEXT_MUTED }):Play()
 			end
 			if tab.ButtonLabel then
-				tab.ButtonLabel.TextColor3 = Theme.TEXT_MUTED
+				TweenService:Create(tab.ButtonLabel, ti, { TextColor3 = Theme.TEXT_MUTED }):Play()
 			end
 		end
 	end
@@ -1602,6 +1624,33 @@ function AsteriaUI.new(opts)
 
 		conns[#conns + 1] = btn.MouseButton1Click:Connect(function()
 			setActive(tab)
+		end)
+
+		-- Hover polish (legacy-like)
+		local hoverTi = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		conns[#conns + 1] = btn.MouseEnter:Connect(function()
+			if btn:GetAttribute("AsteriaTabSelected") == true then
+				return
+			end
+			if btnStroke then
+				TweenService:Create(btnStroke, hoverTi, { Transparency = 0.55 }):Play()
+			end
+			if buttonIcon then
+				TweenService:Create(buttonIcon, hoverTi, { ImageColor3 = Theme.TEXT }):Play()
+			end
+			TweenService:Create(buttonLabel, hoverTi, { TextColor3 = Theme.TEXT }):Play()
+		end)
+		conns[#conns + 1] = btn.MouseLeave:Connect(function()
+			if btn:GetAttribute("AsteriaTabSelected") == true then
+				return
+			end
+			if btnStroke then
+				TweenService:Create(btnStroke, hoverTi, { Transparency = 1 }):Play()
+			end
+			if buttonIcon then
+				TweenService:Create(buttonIcon, hoverTi, { ImageColor3 = Theme.TEXT_MUTED }):Play()
+			end
+			TweenService:Create(buttonLabel, hoverTi, { TextColor3 = Theme.TEXT_MUTED }):Play()
 		end)
 
 		function tab:Section(title)
@@ -1876,6 +1925,91 @@ function AsteriaUI.new(opts)
 		end
 
 		return tab
+	end
+
+	-- Menu toggle (legacy-style): RightControl by default.
+	do
+		local toggleKey = opts.toggleKey or Enum.KeyCode.RightControl
+		local open = true
+		local tweenToken = 0
+		local function setMenuOpen(state)
+			state = state and true or false
+			if open == state then
+				return
+			end
+			open = state
+			tweenToken += 1
+			local token = tweenToken
+
+			if open then
+				window.Gui.Enabled = true
+				if window.DropShadow then
+					window.DropShadow.ImageTransparency = 1
+				end
+				if window.MainStroke then
+					window.MainStroke.Transparency = 1
+				end
+				window.Main.BackgroundTransparency = 1
+
+				TweenService:Create(window.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					BackgroundTransparency = 0,
+				}):Play()
+				if window.MainStroke then
+					TweenService:Create(window.MainStroke, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						Transparency = 0.55,
+					}):Play()
+				end
+				if window.DropShadow then
+					TweenService:Create(window.DropShadow, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						ImageTransparency = 0.6,
+					}):Play()
+				end
+			else
+				TweenService:Create(window.Main, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					BackgroundTransparency = 1,
+				}):Play()
+				if window.MainStroke then
+					TweenService:Create(window.MainStroke, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						Transparency = 1,
+					}):Play()
+				end
+				if window.DropShadow then
+					TweenService:Create(window.DropShadow, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						ImageTransparency = 1,
+					}):Play()
+				end
+				task.delay(0.18, function()
+					if token ~= tweenToken then
+						return
+					end
+					window.Gui.Enabled = false
+				end)
+			end
+		end
+
+		conns[#conns + 1] = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+			if gameProcessed then
+				return
+			end
+			if input.KeyCode ~= toggleKey then
+				return
+			end
+			if UserInputService:GetFocusedTextBox() then
+				return
+			end
+			-- If command overlay is open, ignore menu toggle to avoid fighting.
+			if window.CommandOverlay and window.CommandOverlay.Visible then
+				return
+			end
+			setMenuOpen(not window.Gui.Enabled)
+		end)
+
+		function app:SetMenuOpen(v)
+			setMenuOpen(v)
+		end
+		function app:ToggleMenu()
+			setMenuOpen(not window.Gui.Enabled)
+		end
 	end
 
 	-- Search bar behavior + optional filtering.
